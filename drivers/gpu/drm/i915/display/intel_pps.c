@@ -586,8 +586,15 @@ bool intel_pps_vdd_on_unlocked(struct intel_dp *intel_dp)
 	cancel_delayed_work(&intel_dp->pps.panel_vdd_work);
 	intel_dp->pps.want_panel_vdd = true;
 
-	if (edp_have_panel_vdd(intel_dp))
+	if (edp_have_panel_vdd(intel_dp)) {
 		return need_to_disable;
+	} else {
+		if ((IS_ALDERLAKE_S(dev_priv) || IS_ALDERLAKE_P(dev_priv)) &&
+		    intel_dp->pps.vdd_wakeref)
+			intel_display_power_put(dev_priv,
+						intel_aux_power_domain(dig_port),
+						fetch_and_zero(&intel_dp->pps.vdd_wakeref));
+	}
 
 	drm_WARN_ON(&dev_priv->drm, intel_dp->pps.vdd_wakeref);
 	intel_dp->pps.vdd_wakeref = intel_display_power_get(dev_priv,
