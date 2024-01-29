@@ -1286,10 +1286,8 @@ static int cs35l41_hda_read_acpi(struct cs35l41_hda *cs35l41, const char *hid, i
 
 	property = "cirrus,dev-index";
 	ret = device_property_count_u32(physdev, property);
-	if (ret <= 0) {
-		ret = cs35l41_no_acpi_dsd(cs35l41, physdev, id, hid);
-		goto err_put_physdev;
-	}
+	if (ret <= 0)
+		goto no_acpi_dsd;
 	if (ret > ARRAY_SIZE(values)) {
 		ret = -EINVAL;
 		goto err;
@@ -1383,6 +1381,84 @@ err_put_physdev:
 	put_device(physdev);
 
 	return ret;
+
+	no_acpi_dsd:
+	/*
+	 * Device CLSA0100 doesn't have _DSD so a gpiod_get by the label reset won't work.
+	 * And devices created by i2c-multi-instantiate don't have their device struct pointing to
+	 * the correct fwnode, so acpi_dev must be used here.
+	 * And devm functions expect that the device requesting the resource has the correct
+	 * fwnode.
+	 */
+
+	printk("CSC3551: no_acpi_dsd: %s\n", hid);
+
+	/* TODO: This is a hack. */
+	if (strncmp(hid, "CSC3551", 7) == 0) {
+		goto csc3551;
+	}
+
+	if (strncmp(hid, "CLSA0100", 8) != 0)
+		return -EINVAL;
+
+	/* check I2C address to assign the index */
+	cs35l41->index = id == 0x40 ? 0 : 1;
+	cs35l41->hw_cfg.spk_pos = cs35l41->index;
+	cs35l41->channel_index = 0;
+	cs35l41->reset_gpio = gpiod_get_index(physdev, NULL, 0, GPIOD_OUT_HIGH);
+	cs35l41->hw_cfg.bst_type = CS35L41_EXT_BOOST_NO_VSPK_SWITCH;
+	hw_cfg->gpio2.func = CS35L41_GPIO2_INT_OPEN_DRAIN;
+	hw_cfg->gpio2.valid = true;
+	cs35l41->hw_cfg.valid = true;
+	put_device(physdev);
+
+	csc3551:
+	// cirrus,dev-index
+	if(id == 0x40)
+		cs35l41->index = 0;
+	else
+		cs35l41->index = 1;
+
+	cs35l41->channel_index = 0;
+
+	cs35l41->reset_gpio = gpiod_get_index(physdev, NULL, cs35l41->index, GPIOD_OUT_LOW);
+
+	// cirrus,speaker-position
+	if(cs35l41->index == 0)
+		hw_cfg->spk_pos = 0;
+	else
+		hw_cfg->spk_pos = 1;
+
+	// cirrus,gpio1-func
+	hw_cfg->gpio1.func = 1;
+	hw_cfg->gpio1.valid = true;
+
+	// cirrus,gpio2-func
+	hw_cfg->gpio2.func = 0x02;
+	hw_cfg->gpio2.valid = true;
+
+	// cirrus,boost-peak-milliamp
+	hw_cfg->bst_ipk = -1;
+
+	// cirrus,boost-ind-nanohenry
+	hw_cfg->bst_ind = -1;
+
+	// cirrus,boost-cap-microfarad
+	hw_cfg->bst_cap = -1;
+
+	cs35l41->speaker_id = cs35l41_get_speaker_id(physdev, cs35l41->index, nval, -1);
+
+	if (hw_cfg->bst_ind > 0 || hw_cfg->bst_cap > 0 || hw_cfg->bst_ipk > 0)
+		hw_cfg->bst_type = CS35L41_INT_BOOST;
+	else
+		hw_cfg->bst_type = CS35L41_EXT_BOOST;
+
+	hw_cfg->valid = true;
+
+	put_device(physdev);
+
+	printk("CSC3551: Done.\n");
+	return 0;
 }
 
 int cs35l41_hda_probe(struct device *dev, const char *device_name, int id, int irq,
